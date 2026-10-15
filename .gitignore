@@ -1,0 +1,44 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ambientes virtuais
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+
+# Distribuição e empacotamento
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Testes e cobertura
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Ferramentas e configurações locais
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/
+*.swp
+
+# Variáveis de ambiente e arquivos locais
+*.env
+!.env.example
+
+# Banco de dados local
+*.sqlite3
+
+# Logs
+*.log
