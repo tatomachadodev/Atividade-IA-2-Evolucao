@@ -20,27 +20,29 @@ ENV_ID = "ALE/Breakout-v5"
 TAMANHO_POPULACAO = 20
 NUM_GERACOES = 30
 NUM_ENTRADAS = 128
-NUM_OCULTOS = 16
+NUM_OCULTOS = 32
 NUM_ACOES = 4
-LIMITE_MOVIMENTOS = 5000
+LIMITE_MOVIMENTOS = 8000
+EPISODIOS_POR_AGENTE = 3
 
 TAXA_MUTACAO = 0.10
 INTENSIDADE_MUTACAO = 0.20
-NUM_ELITE = 2
+NUM_ELITE = 3
 
 RESULTADOS = Path("resultados")
 EXPERIMENTOS = {"A": (0.01, 0.05), "B": (0.10, 0.20), "C": (0.40, 0.50)}
+rng = np.random.default_rng(42)
 
 class Agente:
   def __init__(self):
-    self.W1 = np.random.randn(NUM_ENTRADAS, NUM_OCULTOS)
-    self.b1 = np.random.randn(NUM_OCULTOS)
-    self.W2 = np.random.randn(NUM_OCULTOS, NUM_ACOES)
-    self.b2 = np.random.randn(NUM_ACOES)
+    self.W1 = np.random.randn(NUM_ENTRADAS, NUM_OCULTOS) * np.sqrt(2.0 / NUM_ENTRADAS)
+    self.b1 = np.zeros(NUM_OCULTOS)
+    self.W2 = np.random.randn(NUM_OCULTOS, NUM_ACOES) * np.sqrt(2.0 / NUM_OCULTOS)
+    self.b2 = np.zeros(NUM_ACOES)
     self.fitness = 0.0
 
   def agir(self, estado):
-    estado = estado.astype(np.float32) / 255.0
+    estado = estado.astype(np.float32) / 255.0 - 0.5
 
     oculto = np.tanh(estado @ self.W1 + self.b1)
     saida = oculto @ self.W2 + self.b2
@@ -51,11 +53,9 @@ def criar_ambiente(render_mode=None):
   return gym.make(ENV_ID, obs_type="ram", render_mode=render_mode)
 
 def executar_episodio(
-    ambiente, agente=None, seed=42, diagnosticar=False, acompanhar=False
+    ambiente, agente=None, seed=None, diagnosticar=False, acompanhar=False
 ):
   estado, informacoes = ambiente.reset(seed=seed)
-  if acompanhar:
-    ambiente.render()
   aleatorio = np.random.default_rng(seed) if agente is None else None
   recompensa_total = 0.0
   contagem_acoes = np.zeros(NUM_ACOES, dtype=int)
@@ -78,8 +78,6 @@ def executar_episodio(
         trocas_acao += 1
       acao_anterior = acao
     estado, recompensa, terminated, truncated, informacoes = ambiente.step(acao)
-    if acompanhar:
-      ambiente.render()
     recompensa_total += recompensa
     terminado = terminated or truncated
     passos += 1
@@ -112,15 +110,15 @@ def avaliar(agente, ambiente, seed=42, diagnosticar=False, acompanhar=False):
     acompanhar=acompanhar,
   )
 
-def criar_populacao():
+def criar_populacao(tamanho=TAMANHO_POPULACAO):
   populacao = []
-  for _ in range(TAMANHO_POPULACAO):
+  for _ in range(tamanho):
     populacao.append(Agente())
   return populacao
 
 def selecionar(populacao):
   ordenada = sorted(populacao, key=lambda a: a.fitness, reverse=True)
-  num_pais = TAMANHO_POPULACAO // 2
+  num_pais = max(1, len(populacao) // 2)
   return ordenada[:num_pais]
 
 def mutar(agente, taxa, intensidade):
@@ -165,7 +163,7 @@ def treinar(tamanho, geracoes, elite, taxa, intensidade, pasta, seed, acompanhar
     global rng
     rng = np.random.default_rng(seed)
     np.random.seed(seed)
-    populacao = criar_populacao()
+    populacao = criar_populacao(tamanho)
     historico = []
     diagnosticos = []
     melhor_agente = None
@@ -179,13 +177,23 @@ def treinar(tamanho, geracoes, elite, taxa, intensidade, pasta, seed, acompanhar
                 if acompanhar:
                     print(f"  Geração {geracao + 1}/{geracoes} | "
                           f"Indivíduo {indice}/{tamanho}", flush=True)
-                agente.fitness, metricas = avaliar(
-                    agente,
-                    ambiente,
-                    seed=seed,
-                    diagnosticar=True,
-                    acompanhar=acompanhar,
-                )
+                seed_avaliacao = seed + geracao * 10_000 + indice
+                notas = []
+                metricas = None
+                for episodio in range(EPISODIOS_POR_AGENTE):
+                    resultado = avaliar(
+                        agente,
+                        ambiente,
+                        seed=seed_avaliacao + episodio * 101,
+                        diagnosticar=(episodio == 0),
+                        acompanhar=acompanhar and episodio == 0,
+                    )
+                    if episodio == 0:
+                        nota, metricas = resultado
+                    else:
+                        nota = resultado
+                    notas.append(nota)
+                agente.fitness = float(np.mean(notas))
                 diagnosticos.append({
                     "geracao": geracao,
                     "individuo": indice,
@@ -221,7 +229,8 @@ def treinar(tamanho, geracoes, elite, taxa, intensidade, pasta, seed, acompanhar
                   f"Políticas repetitivas (>=95% uma ação): {repetitivos}/{tamanho}")
 
             if geracao < geracoes - 1:
-                populacao = nova_geracao(populacao, elite, taxa, intensidade)
+                intensidade_efetiva = intensidade * (1.0 - 0.8 * geracao / max(1, geracoes - 1))
+                populacao = nova_geracao(populacao, elite, taxa, intensidade_efetiva)
     finally:
         ambiente.close()
 
@@ -238,8 +247,8 @@ def treinar(tamanho, geracoes, elite, taxa, intensidade, pasta, seed, acompanhar
 def comparar(agente, seed):
     ambiente = criar_ambiente()
     try:
-        aleatorio = executar_episodio(ambiente, seed=seed)
-        evoluido = avaliar(agente, ambiente, seed=seed)
+        aleatorio = executar_episodio(ambiente, seed=seed + 50_000)
+        evoluido = avaliar(agente, ambiente, seed=seed + 50_000)
     finally:
         ambiente.close()
     print(f"Comparação | Aleatório: {aleatorio:.2f} | Evoluído: {evoluido:.2f}")
@@ -254,10 +263,10 @@ def visualizar(agente, seed):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Neuroevolução no Freeway")
-    parser.add_argument("--populacao", type=int, default=20)
-    parser.add_argument("--geracoes", type=int, default=30)
-    parser.add_argument("--elite", type=int, default=2)
+    parser = argparse.ArgumentParser(description="Neuroevolução no Breakout")
+    parser.add_argument("--populacao", type=int, default=TAMANHO_POPULACAO)
+    parser.add_argument("--geracoes", type=int, default=NUM_GERACOES)
+    parser.add_argument("--elite", type=int, default=NUM_ELITE)
     parser.add_argument("--experimento", choices=["A", "B", "C", "todos"], default="B")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--visualizar", action="store_true",
